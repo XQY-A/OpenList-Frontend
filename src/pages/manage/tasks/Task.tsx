@@ -15,8 +15,8 @@ import {
   Text,
   VStack,
 } from "@hope-ui/solid"
-import { createSignal, For, Show } from "solid-js"
-import { useT, useFetch } from "~/hooks"
+import { For, Show } from "solid-js"
+import { useT, useFetch, useUtil } from "~/hooks"
 import { PEmptyResp } from "~/types"
 import { handleResp, notify, r } from "~/utils"
 import { TaskAttribute, TaskLocalSetter, TasksProps } from "./Tasks"
@@ -114,8 +114,17 @@ const getTimeStr = (millisecond: number) => {
   return `${toTimeNumber(hour)}:${toTimeNumber(min)}:${toTimeNumber(sec)}`
 }
 
-export const Task = (props: TaskAttribute & TasksProps & TaskLocalSetter) => {
+export const Task = (
+  props: TaskAttribute &
+    TasksProps &
+    TaskLocalSetter & {
+      onDelete: () => void
+      onChanged: () => void
+      deletionBusy: boolean
+    },
+) => {
   const t = useT()
+  const { copy } = useUtil()
   const operateName = props.done === "undone" ? "cancel" : "delete"
   const canRetry =
     props.done === "done" &&
@@ -127,7 +136,6 @@ export const Task = (props: TaskAttribute & TasksProps & TaskLocalSetter) => {
   const [retryLoading, retry] = useFetch((): PEmptyResp =>
     r.post(`/task/${props.type}/retry?tid=${props.id}`),
   )
-  const [deleted, setDeleted] = createSignal(false)
   const matches: RegExpMatchArray | null = props.name.match(
     props.nameAnalyzer.regex,
   )
@@ -171,7 +179,7 @@ export const Task = (props: TaskAttribute & TasksProps & TaskLocalSetter) => {
     speedText = parseSpeedText(timeDelta, lengthDelta)
   }
   return (
-    <Show when={!deleted()}>
+    <>
       <HStack w="$full" p="$2">
         <HStack w={cols[0].w} spacing="$1">
           <Checkbox
@@ -234,14 +242,14 @@ export const Task = (props: TaskAttribute & TasksProps & TaskLocalSetter) => {
           <Show when={props.canRetry}>
             <Button
               size="sm"
-              disabled={!canRetry}
+              disabled={!canRetry || props.deletionBusy}
               display={canRetry ? "block" : "none"}
               loading={retryLoading()}
               onClick={async () => {
                 const resp = await retry()
                 handleResp(resp, () => {
                   notify.info(t("tasks.retry"))
-                  setDeleted(true)
+                  props.onChanged()
                 })
               }}
             >
@@ -252,11 +260,16 @@ export const Task = (props: TaskAttribute & TasksProps & TaskLocalSetter) => {
             size="sm"
             colorScheme="danger"
             loading={operateLoading()}
+            disabled={props.deletionBusy}
             onClick={async () => {
+              if (operateName === "delete") {
+                props.onDelete()
+                return
+              }
               const resp = await operate()
               handleResp(resp, () => {
                 notify.success(t("global.delete_success"))
-                setDeleted(true)
+                props.onChanged()
               })
             }}
           >
@@ -328,6 +341,65 @@ export const Task = (props: TaskAttribute & TasksProps & TaskLocalSetter) => {
               {t(`tasks.attr.status`)}
             </GridItem>
             <GridItem color="$neutral9">{props.status}</GridItem>
+            <Show when={props.tool === "115 Open"}>
+              <GridItem
+                color="$neutral11"
+                textAlign="right"
+                css={{ whiteSpace: "nowrap" }}
+              >
+                {t("tasks.info_hash")}
+              </GridItem>
+              <GridItem minW="0">
+                <HStack alignItems="start" spacing="$2">
+                  <Text
+                    as="code"
+                    css={{ overflowWrap: "anywhere", userSelect: "text" }}
+                  >
+                    {props.info_hash || t("tasks.receipt_pending")}
+                  </Text>
+                  <Show when={props.info_hash}>
+                    <Button
+                      size="xs"
+                      flexShrink="0"
+                      onClick={() => copy(props.info_hash!)}
+                      aria-label={t("tasks.copy_info_hash")}
+                    >
+                      {t("global.copy")}
+                    </Button>
+                  </Show>
+                </HStack>
+              </GridItem>
+              <GridItem
+                color="$neutral11"
+                textAlign="right"
+                css={{ whiteSpace: "nowrap" }}
+              >
+                {t("tasks.submission_status_label")}
+              </GridItem>
+              <GridItem color="$neutral11">
+                {t(
+                  `tasks.submission_state.${props.submission_state ?? "legacy"}`,
+                  undefined,
+                  props.submission_state,
+                )}
+              </GridItem>
+              <Show when={props.cloud_delete_state !== undefined}>
+                <GridItem
+                  color="$neutral11"
+                  textAlign="right"
+                  css={{ whiteSpace: "nowrap" }}
+                >
+                  {t("tasks.cloud_status_label")}
+                </GridItem>
+                <GridItem color="$neutral11">
+                  {t(
+                    `tasks.cloud_state.${props.cloud_delete_state}`,
+                    undefined,
+                    props.cloud_delete_state,
+                  )}
+                </GridItem>
+              </Show>
+            </Show>
             <Show when={props.error}>
               <GridItem
                 color="$danger9"
@@ -342,6 +414,6 @@ export const Task = (props: TaskAttribute & TasksProps & TaskLocalSetter) => {
           <Divider />
         </VStack>
       </Show>
-    </Show>
+    </>
   )
 }

@@ -19,12 +19,14 @@ import {
   Type,
 } from "~/types"
 import { createStore, produce } from "solid-js/store"
-import { Item } from "./Item"
+import { Item, type ItemProps } from "./Item"
 import { ResponsiveGrid } from "../common/ResponsiveGrid"
 
+type StorageDriverItem = DriverItem & { type: ItemProps["type"] }
+
 interface DriverInfo {
-  common: DriverItem[]
-  additional: DriverItem[]
+  common: StorageDriverItem[]
+  additional: StorageDriverItem[]
   config: DriverConfig
 }
 

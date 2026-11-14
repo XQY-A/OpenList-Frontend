@@ -68,6 +68,8 @@ import { AiOutlineCloudDownload } from "solid-icons/ai"
 import { Operations } from "~/pages/home/toolbar/operations"
 import "solid-contextmenu/dist/style.css"
 
+type ArchivePreview = typeof import("./image").default
+
 const download = (url: string) => {
   window.open(url, "_blank")
 }
@@ -572,7 +574,7 @@ const Preview = () => {
             <VStack w="$full" spacing="$2" alignItems="center">
               <Show when={currentPreview()}>
                 <Suspense fallback={<FullLoading />}>
-                  <Dynamic
+                  <Dynamic<ArchivePreview>
                     component={currentPreview()?.component}
                     images={files().filter((f) => f.type === ObjType.IMAGE)}
                     navigate={(name) => {

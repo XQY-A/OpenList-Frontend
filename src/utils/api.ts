@@ -20,6 +20,7 @@ import {
   SeedOperationRequest,
   SeedOperationResult,
   SeedParseResult,
+  OfflineDownloadAddData,
 } from "~/types"
 import { r } from "."
 
@@ -237,7 +238,7 @@ export const offlineDownload = (
   urls: string[],
   tool: string,
   delete_policy: string,
-): PEmptyResp => {
+): PResp<OfflineDownloadAddData | null | undefined> => {
   return r.post(`/fs/add_offline_download`, { path, urls, tool, delete_policy })
 }
 

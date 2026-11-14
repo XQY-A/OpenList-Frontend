@@ -46,6 +46,7 @@ parse_args() {
             --no-compress) COMPRESS_FLAG="false"; shift ;;
             --enforce-tag) ENFORCE_TAG="true"; shift ;;
             --skip-i18n) SKIP_I18N="true"; shift ;;
+            --locked-i18n) LOCKED_I18N="true"; shift ;;
             --lite) LITE_FLAG="true"; shift ;;
             -h|--help) display_help; exit 0 ;;
             *) log_error "Unknown option: $1"; display_help; exit 1 ;;
@@ -55,7 +56,7 @@ parse_args() {
 
 # Display help message
 display_help() {
-    echo "Usage: $0 [--dev|--release] [--compress|--no-compress] [--enforce-tag] [--skip-i18n] [--lite]"
+    echo "Usage: $0 [--dev|--release] [--compress|--no-compress] [--enforce-tag] [--skip-i18n|--locked-i18n] [--lite]"
     echo ""
     echo "Options (will overwrite environment setting):"
     echo "  --dev         Build development version"
@@ -64,6 +65,7 @@ display_help() {
     echo "  --no-compress Skip compression"
     echo "  --enforce-tag Force git tag requirement for both dev and release builds"
     echo "  --skip-i18n   Skip i18n build step"
+    echo "  --locked-i18n Download and verify the pinned official translations, then apply local overlays"
     echo "  --lite        Build lite version"
     echo ""
     echo "Environment variables:"
@@ -71,6 +73,7 @@ display_help() {
     echo "  OPENLIST_FRONTEND_BUILD_COMPRESS=true|false (default: false)"
     echo "  OPENLIST_FRONTEND_BUILD_ENFORCE_TAG=true|false (default: false)"
     echo "  OPENLIST_FRONTEND_BUILD_SKIP_I18N=true|false (default: false)"
+    echo "  OPENLIST_FRONTEND_BUILD_LOCKED_I18N=true|false (default: false)"
 }
 
 # Set default values from environment variables
@@ -79,7 +82,12 @@ set_defaults() {
     COMPRESS_FLAG=${COMPRESS_FLAG:-${OPENLIST_FRONTEND_BUILD_COMPRESS:-false}}
     ENFORCE_TAG=${ENFORCE_TAG:-${OPENLIST_FRONTEND_BUILD_ENFORCE_TAG:-false}}
     SKIP_I18N=${SKIP_I18N:-${OPENLIST_FRONTEND_BUILD_SKIP_I18N:-false}}
+    LOCKED_I18N=${LOCKED_I18N:-${OPENLIST_FRONTEND_BUILD_LOCKED_I18N:-false}}
     LITE_FLAG=${LITE_FLAG:-false}
+    if [[ "$LOCKED_I18N" == "true" && "$SKIP_I18N" == "true" ]]; then
+        log_error "--locked-i18n and --skip-i18n cannot be combined."
+        exit 1
+    fi
 }
 
 # Check git version and commit
@@ -90,6 +98,15 @@ check_git_version_and_commit() {
         fallback_git_tag
     fi
     commit=$(git rev-parse --short HEAD)
+    source_commit=$(git rev-parse --verify HEAD)
+    if [[ ! "$source_commit" =~ ^[0-9a-f]{40}$ ]]; then
+        log_error "Expected a complete 40-character source commit."
+        exit 1
+    fi
+    source_dirty="false"
+    if [[ -n "$(git status --porcelain --untracked-files=normal)" ]]; then
+        source_dirty="true"
+    fi
 }
 
 # Enforce git tag for release builds
@@ -145,10 +162,14 @@ set_build_version() {
 # Build the project
 build_project() {
     log_step "==== Installing dependencies ===="
-    pnpm install
+    pnpm install --frozen-lockfile
 
     log_step "==== Building i18n ===="
-    if [[ "$SKIP_I18N" == "false" ]]; then
+    if [[ "$LOCKED_I18N" == "true" ]]; then
+        # A failed download or digest check must stop personal builds. Never
+        # fall back to Crowdin or the floating edge release in this mode.
+        node ./scripts/i18n-locked.mjs
+    elif [[ "$SKIP_I18N" == "false" ]]; then
         if ! pnpm i18n:release; then
             log_warning "Crowdin download failed, falling back to the edge beta release"
             fetch_i18n_from_release "edge" || true
@@ -207,6 +228,14 @@ extract_i18n_tarball() {
 create_version_file() {
     log_step "Writing version $version_tag to dist/VERSION..."
     echo -n "$version_tag" > dist/VERSION
+    if [[ "$(git rev-parse --verify HEAD)" != "$source_commit" || -n "$(git status --porcelain --untracked-files=normal)" ]]; then
+        source_dirty="true"
+    fi
+    echo -n "$source_commit" > dist/SOURCE_COMMIT
+    echo -n "$source_dirty" > dist/SOURCE_DIRTY
+    if [[ "$source_dirty" == "true" ]]; then
+        log_warning "Source contains local changes; dist/SOURCE_DIRTY=true."
+    fi
     log_success "Version file created: dist/VERSION"
 }
 
@@ -223,4 +252,6 @@ handle_compression() {
 }
 
 # Run the script
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

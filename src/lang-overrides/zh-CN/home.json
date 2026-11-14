@@ -1,0 +1,18 @@
+{
+  "toolbar": {
+    "offline_download_enhanced": {
+      "add_created": "已创建 {{count}} 个任务",
+      "add_partial": "已创建 {{created}} 个任务，{{failed}} 项未创建",
+      "add_all_failed": "未创建任何任务",
+      "add_retry_hint": "输入中仅保留未创建的项目，请查看失败原因后再提交。",
+      "add_task": "第 {{index}} 项已创建，任务 ID：{{id}}",
+      "add_error": "第 {{index}} 项未创建：{{error}}",
+      "add_hash_hint": "已创建的任务已进入队列，115 返回后可在任务列表查看 info-hash；无需为了获取 hash 再次添加。",
+      "add_unknown": "提交结果无法确认",
+      "add_unknown_hint": "部分任务可能已经创建，请先核对离线任务列表。此处已禁止再次提交本批次；关闭对话框后，仅填写确认未创建的链接。",
+      "add_reported_ids": "服务器返回的任务 ID",
+      "add_view_tasks": "核对离线任务（新标签页）",
+      "add_retry": "重试未创建的项目"
+    }
+  }
+}

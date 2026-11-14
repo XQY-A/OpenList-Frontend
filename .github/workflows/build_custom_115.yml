@@ -1,0 +1,57 @@
+name: Personal 115 Build
+
+on:
+  push:
+    branches: [custom/115]
+  pull_request:
+    branches: [custom/115]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24.22.2"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: "11.28.11"
+          run_install: false
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Prepare locked translations
+        run: pnpm i18n:locked
+
+      - name: Check types
+        run: pnpm lint
+
+      - name: Run unit tests
+        run: pnpm test
+
+      - name: Build personal frontend
+        run: |
+          bash build.sh --dev --locked-i18n --no-compress
+          test "$(cat dist/SOURCE_COMMIT)" = "$(git rev-parse HEAD)"
+          test "$(cat dist/SOURCE_DIRTY)" = "false"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: openlist-frontend-custom-115-${{ github.sha }}
+          path: dist/
+          retention-days: 14

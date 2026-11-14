@@ -21,10 +21,16 @@ import {
 } from "solid-js"
 import { Paginator } from "~/components"
 import { useFetch, useT } from "~/hooks"
-import { PEmptyResp, PResp, TaskInfo } from "~/types"
+import { PEmptyResp, Resp, TaskInfo } from "~/types"
 import { handleResp, notify, r } from "~/utils"
 import { TaskCol, cols, Task, TaskOrderBy, TaskLocal } from "./Task"
 import { me } from "~/store"
+import { DeleteTasksDialog } from "./DeleteTasksDialog"
+import {
+  clearTaskTargets,
+  TaskDeleteAction,
+  TaskDeleteRequest,
+} from "./deletion"
 
 export interface TaskNameAnalyzer {
   regex: RegExp
@@ -67,10 +73,14 @@ const undoneStatePriority: Record<number, number> = {
 
 export const Tasks = (props: TasksProps) => {
   const t = useT()
-  const [loading, get] = useFetch((): PResp<TaskInfo[]> =>
-    r.get(`/task/${props.type}/${props.done}`),
-  )
+  const [loading, setLoading] = createSignal(false)
+  let pendingRefreshes = 0
   const [tasks, setTasks] = createSignal<TaskAttribute[]>([])
+  const [deleteRequest, setDeleteRequest] = createSignal<TaskDeleteRequest>()
+  const [preparingDelete, setPreparingDelete] = createSignal(false)
+  const deletionBusy = () => preparingDelete() || !!deleteRequest()
+  const removedIds = new Set<string>()
+  let refreshVersion = 0
   const [orderBy, setOrderBy] = createSignal<TaskOrderBy>("name")
   const [orderReverse, setOrderReverse] = createSignal(false)
   const sorter: Record<TaskOrderBy, (a: TaskInfo, b: TaskInfo) => number> = {
@@ -108,7 +118,25 @@ export const Tasks = (props: TasksProps) => {
     }
   })
   const refresh = async () => {
-    const resp = await get()
+    const version = ++refreshVersion
+    ++pendingRefreshes
+    setLoading(true)
+    let resp: Resp<TaskInfo[]>
+    try {
+      resp = await r.get(`/task/${props.type}/${props.done}`)
+    } catch {
+      notify.error(t("tasks.delete_dialog.refresh_failed"))
+      return false
+    } finally {
+      --pendingRefreshes
+      setLoading(pendingRefreshes > 0)
+    }
+    if (version !== refreshVersion) return true
+    if (resp.code !== 200 || !Array.isArray(resp.data)) {
+      if (resp.code !== 200) handleResp(resp)
+      else notify.error(t("tasks.delete_dialog.refresh_failed"))
+      return false
+    }
     handleResp(resp, (data) => {
       const fetchTime = new Date().getTime()
       const curFetchTimeMap: Record<string, number> = {}
@@ -125,7 +153,8 @@ export const Tasks = (props: TasksProps) => {
       }
       setTasks(
         data
-          ?.map((task) => {
+          ?.filter((task) => !removedIds.has(task.id))
+          .map((task) => {
             let prevFetchTime: number | undefined
             let prevProgress: number | undefined
             if (task.progress === curProgressMap[task.id]) {
@@ -150,18 +179,48 @@ export const Tasks = (props: TasksProps) => {
           .sort(curSorter()) ?? [],
       )
     })
+    return true
+  }
+  const removeDeleted = (ids: string[]) => {
+    ++refreshVersion
+    ids.forEach((id) => removedIds.add(id))
+    setTasks((current) => current.filter((task) => !removedIds.has(task.id)))
+  }
+  const openDelete = async (
+    action: TaskDeleteAction,
+    targets: TaskInfo[] = [],
+  ) => {
+    if (deletionBusy()) return
+    if (action === "clear_done" || action === "clear_succeeded") {
+      setPreparingDelete(true)
+      try {
+        // Clear always addresses the complete type, including hidden pages and
+        // tasks hidden by the name/creator filters. Preview that same scope.
+        const resp: Resp<TaskInfo[]> = await r.get(`/task/${props.type}/done`)
+        if (resp.code !== 200 || !Array.isArray(resp.data)) {
+          if (resp.code !== 200) handleResp(resp)
+          else notify.error(t("tasks.delete_dialog.refresh_failed"))
+          return
+        }
+        targets = clearTaskTargets(resp.data, action)
+      } catch {
+        notify.error(t("tasks.delete_dialog.refresh_failed"))
+        return
+      } finally {
+        setPreparingDelete(false)
+      }
+    }
+    if (targets.length === 0) {
+      notify.info(t("tasks.delete_dialog.no_targets"))
+      return
+    }
+    setDeleteRequest({ action, targets })
   }
   refresh()
   if (props.done === "undone") {
     const interval = setInterval(refresh, 2000)
     onCleanup(() => clearInterval(interval))
   }
-  const [clearDoneLoading, clearDone] = useFetch((): PEmptyResp =>
-    r.post(`/task/${props.type}/clear_done`),
-  )
-  const [clearSucceededLoading, clearSucceeded] = useFetch((): PEmptyResp =>
-    r.post(`/task/${props.type}/clear_succeeded`),
-  )
   const [retryFailedLoading, retryFailed] = useFetch((): PEmptyResp =>
     r.post(`/task/${props.type}/retry_failed`),
   )
@@ -237,9 +296,17 @@ export const Tasks = (props: TasksProps) => {
   }
   const [page, setPage] = createSignal(1)
   const pageSize = 20
+  let resetPaginator = () => {}
+  createEffect(() => {
+    if (page() > Math.max(1, Math.ceil(filteredTask().length / pageSize))) {
+      setPage(1)
+      resetPaginator()
+    }
+  })
   const operateName = props.done === "undone" ? "cancel" : "delete"
   const curTasks = createMemo(() => {
-    const start = (page() - 1) * pageSize
+    const lastPage = Math.max(1, Math.ceil(filteredTask().length / pageSize))
+    const start = (Math.min(page(), lastPage) - 1) * pageSize
     const end = start + pageSize
     return filteredTask().slice(start, end)
   })
@@ -289,6 +356,7 @@ export const Tasks = (props: TasksProps) => {
           <Show when={props.type !== "seed_save"}>
             <Button
               loading={retryFailedLoading()}
+              disabled={deletionBusy()}
               onClick={async () => {
                 const resp = await retryFailed()
                 handleResp(resp, () => refresh())
@@ -299,21 +367,16 @@ export const Tasks = (props: TasksProps) => {
           </Show>
           <Button
             colorScheme="danger"
-            loading={clearDoneLoading()}
-            onClick={async () => {
-              const resp = await clearDone()
-              handleResp(resp, () => refresh())
-            }}
+            loading={preparingDelete()}
+            disabled={deletionBusy()}
+            onClick={() => openDelete("clear_done")}
           >
             {t(`global.clear`)}
           </Button>
           <Button
             colorScheme="success"
-            loading={clearSucceededLoading()}
-            onClick={async () => {
-              const resp = await clearSucceeded()
-              handleResp(resp, () => refresh())
-            }}
+            disabled={deletionBusy()}
+            onClick={() => openDelete("clear_succeeded")}
           >
             {t(`tasks.clear_succeeded`)}
           </Button>
@@ -322,6 +385,7 @@ export const Tasks = (props: TasksProps) => {
           <Button
             colorScheme="primary"
             loading={retrySelectedLoading()}
+            disabled={deletionBusy() || getSelectedId().length === 0}
             onClick={async () => {
               const resp = await retrySelected()
               handleResp(resp, (data) => {
@@ -336,7 +400,15 @@ export const Tasks = (props: TasksProps) => {
         <Button
           colorScheme="warning"
           loading={operateSelectedLoading()}
+          disabled={deletionBusy() || getSelectedId().length === 0}
           onClick={async () => {
+            if (operateName === "delete") {
+              await openDelete(
+                "delete_some",
+                filteredTask().filter((task) => task.local.selected),
+              )
+              return
+            }
             const resp = await operateSelected()
             handleResp(resp, (data) => {
               notifyIndividualError(data)
@@ -424,16 +496,42 @@ export const Tasks = (props: TasksProps) => {
           </Flex>
         </HStack>
         {curTasks().map((task) => (
-          <Task {...task} {...props} setLocal={getLocalSetter(task.id)} />
+          <Task
+            {...task}
+            {...props}
+            setLocal={getLocalSetter(task.id)}
+            deletionBusy={deletionBusy()}
+            onDelete={() => openDelete("delete", [task])}
+            onChanged={() => {
+              setTasks((current) =>
+                current.filter((item) => item.id !== task.id),
+              )
+              refresh()
+            }}
+          />
         ))}
       </VStack>
       <Paginator
         total={filteredTask().length}
         defaultPageSize={pageSize}
+        setResetCallback={(reset) => {
+          resetPaginator = reset
+        }}
         onChange={(p) => {
           setPage(p)
         }}
       />
+      <Show when={deleteRequest()} keyed>
+        {(request) => (
+          <DeleteTasksDialog
+            type={props.type}
+            request={request}
+            onClose={() => setDeleteRequest(undefined)}
+            onDeleted={removeDeleted}
+            refresh={refresh}
+          />
+        )}
+      </Show>
     </VStack>
   )
 }

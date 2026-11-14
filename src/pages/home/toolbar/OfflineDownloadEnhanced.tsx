@@ -34,6 +34,7 @@ import {
   handleResp,
   notify,
   r,
+  joinBase,
 } from "~/utils"
 import {
   createSignal,
@@ -57,6 +58,10 @@ import {
 import bencode from "bencode"
 import crypto from "crypto-js"
 import { TorrentFileList } from "./TorrentFileList"
+import {
+  classifyOfflineDownloadResponse,
+  type OfflineDownloadOutcome,
+} from "~/utils/offline_download_115"
 
 const deletePolicies = [
   "upload_download_stream",
@@ -887,10 +892,11 @@ export const OfflineDownloadEnhanced = () => {
 
   // 下载工具列表
   const [tools, setTools] = createSignal([] as string[])
-  const [toolsLoading, reqTool] = useFetch((path: string): PResp<string[]> => {
+  const [toolsLoading, setToolsLoading] = createSignal(false)
+  const reqTool = (path: string): PResp<string[]> => {
     const query = path ? `?path=${encodeURIComponent(path)}` : ""
     return r.get(`/public/offline_download_tools${query}`)
-  })
+  }
   const [tool, setTool] = createSignal("")
   const [deletePolicy, setDeletePolicy] = createSignal<DeletePolicy>(
     "upload_download_stream",
@@ -902,7 +908,8 @@ export const OfflineDownloadEnhanced = () => {
 
   // 链接下载状态
   const [linkValue, setLinkValue] = createSignal("")
-  const [linkLoading, submitLink] = useFetch(offlineDownload)
+  const [linkLoading, setLinkLoading] = createSignal(false)
+  const [addOutcome, setAddOutcome] = createSignal<OfflineDownloadOutcome>()
 
   // BT 下载状态
   const [torrentInfo, setTorrentInfo] = createSignal<TorrentInfo | null>(null)
@@ -970,6 +977,21 @@ export const OfflineDownloadEnhanced = () => {
   const [casRapidUploadFailed, setCasRapidUploadFailed] =
     createSignal<boolean>(false)
 
+  const submitting = () => linkLoading() || btLoading() || rapidUploading()
+  const editingLocked = () =>
+    submitting() ||
+    parsing() ||
+    toolsLoading() ||
+    addOutcome()?.kind === "unknown"
+  const verifiedResults = () => {
+    const outcome = addOutcome()
+    return outcome?.kind === "results" ? outcome : undefined
+  }
+  const unknownResult = () => {
+    const outcome = addOutcome()
+    return outcome?.kind === "unknown" ? outcome : undefined
+  }
+
   // 检测输入中是否包含 ed2k 链接
   const hasEd2kLinks = createMemo(() => {
     return linkValue()
@@ -1029,12 +1051,32 @@ export const OfflineDownloadEnhanced = () => {
     }
   })
 
+  createEffect(() => {
+    if (
+      tool() &&
+      tool() !== "SimpleHttp" &&
+      deletePolicy() === "upload_download_stream"
+    ) {
+      setDeletePolicy("delete_on_upload_succeed")
+    }
+  })
+
+  let toolsRequestSeq = 0
   const loadTools = async (path: string) => {
-    const resp = await reqTool(path)
-    handleResp(resp, (data) => {
-      setTools(data)
-      setTool(data[0])
-    })
+    const requestSeq = ++toolsRequestSeq
+    setToolsLoading(true)
+    try {
+      const resp = await reqTool(path)
+      if (requestSeq !== toolsRequestSeq || submitting()) return
+      handleResp(resp, (data) => {
+        setTools(data)
+        setTool(data[0] ?? "")
+      })
+    } catch (error) {
+      if (requestSeq === toolsRequestSeq) notify.error(String(error))
+    } finally {
+      if (requestSeq === toolsRequestSeq) setToolsLoading(false)
+    }
   }
 
   onMount(() => loadTools(pathname()))
@@ -1042,6 +1084,7 @@ export const OfflineDownloadEnhanced = () => {
   // 监听 bus 事件
   const handler = (name: string) => {
     if (name === "offline_download") {
+      if (isOpen() || submitting() || parsing()) return
       const currentPath = pathname()
       setSavePath(currentPath)
       void loadTools(currentPath)
@@ -1055,12 +1098,14 @@ export const OfflineDownloadEnhanced = () => {
 
   // 监听从右键菜单触发的 torrent 解析事件
   const torrentHandler = (data: { torrentData: string; info: TorrentInfo }) => {
+    if (isOpen() || submitting() || parsing()) return
     setTorrentData(data.torrentData)
     setTorrentInfo(data.info)
     setSelectedFiles(data.info.files.map((_, i) => i))
     setActiveTab("torrent")
     const currentPath = pathname()
     setSavePath(currentPath)
+    void loadTools(currentPath)
     onOpen()
   }
   bus.on("torrent_parsed", torrentHandler)
@@ -1115,11 +1160,17 @@ export const OfflineDownloadEnhanced = () => {
     setSavePathProvider("")
     setRapidUploadResult("")
     setCasRapidUploadFailed(false)
+    setAddOutcome(undefined)
+  }
+
+  const finishAndClose = () => {
+    resetState()
+    onClose()
   }
 
   const handleClose = () => {
-    resetState()
-    onClose()
+    if (submitting() || parsing()) return
+    finishAndClose()
   }
 
   onCleanup(() => {
@@ -1128,6 +1179,7 @@ export const OfflineDownloadEnhanced = () => {
 
   // 处理 torrent 文件拖拽/选择
   const handleTorrentFile = async (file: File) => {
+    if (editingLocked()) return
     if (file.size > 10 * 1024 * 1024) {
       notificationService.show({
         status: "danger",
@@ -1162,6 +1214,7 @@ export const OfflineDownloadEnhanced = () => {
   const handleDrop = (e: DragEvent) => {
     e.preventDefault()
     e.stopPropagation()
+    if (editingLocked()) return
     if (!e.dataTransfer?.files.length) return
 
     if (activeTab() === "torrent") {
@@ -1175,21 +1228,27 @@ export const OfflineDownloadEnhanced = () => {
     } else {
       // Link Tab: 将 torrent 文件转换为磁力链追加到输入框
       const processFiles = async () => {
-        const values: string[] = []
-        for (const file of e.dataTransfer!.files) {
-          if (file.name.toLowerCase().endsWith(".torrent")) {
-            try {
-              const buffer = await file.arrayBuffer()
-              values.push(toMagnetUrl(new Uint8Array(buffer)))
-            } catch (err) {
-              console.error("Failed to convert torrent:", err)
+        const files = Array.from(e.dataTransfer!.files)
+        setParsing(true)
+        try {
+          const values: string[] = []
+          for (const file of files) {
+            if (file.name.toLowerCase().endsWith(".torrent")) {
+              try {
+                const buffer = await file.arrayBuffer()
+                values.push(toMagnetUrl(new Uint8Array(buffer)))
+              } catch (err) {
+                console.error("Failed to convert torrent:", err)
+              }
             }
           }
-        }
-        if (values.length) {
-          setLinkValue((prev) =>
-            prev ? prev + "\n" + values.join("\n") : values.join("\n"),
-          )
+          if (values.length) {
+            setLinkValue((prev) =>
+              prev ? prev + "\n" + values.join("\n") : values.join("\n"),
+            )
+          }
+        } finally {
+          setParsing(false)
         }
       }
       processFiles()
@@ -1198,6 +1257,7 @@ export const OfflineDownloadEnhanced = () => {
 
   // 文件选择处理
   const handleFileSelect = () => {
+    if (editingLocked()) return
     const input = document.createElement("input")
     input.type = "file"
     input.accept = ".torrent"
@@ -1210,23 +1270,62 @@ export const OfflineDownloadEnhanced = () => {
     input.click()
   }
 
+  const submitOfflineUrls = async (urls: string[], source: TabType) => {
+    // Capture the request inputs once; a late response must never use new input.
+    const requestTool = tool()
+    try {
+      const resp = await offlineDownload(
+        savePath(),
+        urls,
+        requestTool,
+        deletePolicy(),
+      )
+      const outcome = classifyOfflineDownloadResponse(requestTool, urls, resp)
+      if (outcome.kind === "legacy") {
+        handleRespWithNotifySuccess(resp, finishAndClose)
+        return
+      }
+      setAddOutcome(outcome)
+      if (outcome.kind === "unknown") return
+      if (source === "link") {
+        setLinkValue(outcome.retryUrls.join("\n"))
+      }
+      if (outcome.created.length > 0 && outcome.failed.length === 0) {
+        notificationService.show({
+          status: "success",
+          title: t("home.toolbar.offline_download_enhanced.add_created", {
+            count: outcome.created.length,
+          }),
+        })
+        finishAndClose()
+      }
+    } catch {
+      setAddOutcome({ kind: "unknown", taskIds: [] })
+    }
+  }
+
   // 提交链接下载
   const handleLinkSubmit = async () => {
-    if (!linkValue().trim()) return
+    if (editingLocked() || !linkValue().trim()) return
     const urls = linkValue()
       .split("\n")
       .filter((u) => u.trim())
-    const resp = await submitLink(savePath(), urls, tool(), deletePolicy())
-    handleRespWithNotifySuccess(resp, () => {
-      handleClose()
-    })
+    setAddOutcome(undefined)
+    setLinkLoading(true)
+    try {
+      await submitOfflineUrls(urls, "link")
+    } finally {
+      setLinkLoading(false)
+    }
   }
 
   // 提交 BT 下载
   const handleBtSubmit = async () => {
+    if (editingLocked()) return
     const info = torrentInfo()
     if (!info || !torrentData()) return
 
+    setAddOutcome(undefined)
     setBtLoading(true)
     try {
       // 有 CAS 信息且秒传尚未失败时，默认直接走天翼云秒传
@@ -1243,7 +1342,7 @@ export const OfflineDownloadEnhanced = () => {
               ),
               description: resp.data.file_name,
             })
-            handleClose()
+            finishAndClose()
             return
           } else {
             // 秒传失败，标记允许回退到普通离线下载
@@ -1290,14 +1389,12 @@ export const OfflineDownloadEnhanced = () => {
         c.charCodeAt(0),
       )
       const magnetUrl = toMagnetUrl(buffer)
-      const resp = await offlineDownload(
-        savePath(),
-        [magnetUrl],
-        tool(),
-        deletePolicy(),
-      )
-      handleRespWithNotifySuccess(resp, () => {
-        handleClose()
+      await submitOfflineUrls([magnetUrl], "torrent")
+    } catch (err) {
+      notificationService.show({
+        status: "danger",
+        title: t("home.toolbar.offline_download_enhanced.parse_failed"),
+        description: String(err),
       })
     } finally {
       setBtLoading(false)
@@ -1310,6 +1407,8 @@ export const OfflineDownloadEnhanced = () => {
       blockScrollOnMount={false}
       opened={isOpen()}
       onClose={handleClose}
+      closeOnEsc={!submitting() && !parsing()}
+      closeOnOverlayClick={!submitting() && !parsing()}
     >
       <ModalOverlay />
       <ModalContent
@@ -1321,320 +1420,462 @@ export const OfflineDownloadEnhanced = () => {
       >
         <ModalHeader>{t("home.toolbar.offline_download")}</ModalHeader>
         <ModalBody>
-          {/* Tab 切换 */}
-          <HStack spacing="$2" mb="$3">
-            <Button
-              size="sm"
-              variant={activeTab() === "link" ? "solid" : "outline"}
-              onClick={() => setActiveTab("link")}
-            >
-              {t("home.toolbar.offline_download_enhanced.tab_link")}
-            </Button>
-            <Button
-              size="sm"
-              variant={activeTab() === "torrent" ? "solid" : "outline"}
-              onClick={() => setActiveTab("torrent")}
-            >
-              {t("home.toolbar.offline_download_enhanced.tab_bt")}
-            </Button>
-          </HStack>
-
-          {/* 链接下载 Tab */}
-          <Show when={activeTab() === "link"}>
-            <VStack spacing="$2" alignItems="stretch">
-              <Textarea
-                placeholder={t(
-                  "home.toolbar.offline_download_enhanced.link_placeholder",
-                )}
-                value={linkValue()}
-                onInput={(e) => setLinkValue(e.currentTarget.value)}
-                minH="120px"
-              />
-              <Text fontSize="$xs" color="$neutral10">
-                {t("home.toolbar.offline_download_enhanced.link_tips")}
-              </Text>
-            </VStack>
-          </Show>
-
-          {/* BT 下载 Tab */}
-          <Show when={activeTab() === "torrent"}>
-            <VStack spacing="$3" alignItems="stretch">
-              {/* 未解析时显示上传区域 */}
-              <Show when={!torrentInfo()}>
-                <Box
-                  border="2px dashed $neutral7"
-                  borderRadius="$md"
-                  p="$6"
-                  textAlign="center"
-                  cursor="pointer"
-                  onClick={handleFileSelect}
-                  _hover={{ borderColor: "$primary9", bg: "$primary3" }}
-                >
-                  <Show
-                    when={parsing()}
-                    fallback={
-                      <VStack spacing="$2">
-                        <Text fontSize="$lg" fontWeight="$bold">
-                          {t(
-                            "home.toolbar.offline_download_enhanced.drop_torrent",
-                          )}
-                        </Text>
-                        <Text fontSize="$sm" color="$neutral10">
-                          {t(
-                            "home.toolbar.offline_download_enhanced.click_to_select",
-                          )}
-                        </Text>
-                      </VStack>
-                    }
-                  >
-                    <Text>
-                      {t("home.toolbar.offline_download_enhanced.parsing")}
-                    </Text>
-                  </Show>
-                </Box>
-              </Show>
-
-              {/* 已解析时显示文件列表 */}
-              <Show when={torrentInfo()}>
-                <VStack spacing="$2" alignItems="stretch">
-                  {/* 种子信息头部 */}
-                  <HStack justifyContent="space-between" alignItems="center">
-                    <VStack alignItems="flex-start" spacing="$1">
-                      <Heading size="sm" css={{ wordBreak: "break-all" }}>
-                        {torrentInfo()!.name}
-                      </Heading>
-                      <HStack spacing="$2">
-                        <Text fontSize="$xs" color="$neutral10">
-                          {formatFileSize(torrentInfo()!.total_size)}
-                        </Text>
-                        <Text fontSize="$xs" color="$neutral10">
-                          {torrentInfo()!.files.length}{" "}
-                          {t(
-                            "home.toolbar.offline_download_enhanced.files_count",
-                          )}
-                        </Text>
-                      </HStack>
-                    </VStack>
-                    <HStack spacing="$2">
-                      <Show when={torrentInfo()!.has_cas}>
-                        <Badge colorScheme="success">
-                          {t(
-                            "home.toolbar.offline_download_enhanced.cas_supported",
-                          )}
-                        </Badge>
-                      </Show>
-                      <Button
-                        size="xs"
-                        variant="outline"
-                        onClick={() => {
-                          setTorrentInfo(null)
-                          setTorrentData("")
-                          setSelectedFiles([])
-                        }}
-                      >
-                        {t("home.toolbar.offline_download_enhanced.reselect")}
-                      </Button>
-                    </HStack>
-                  </HStack>
-
-                  {/* 文件列表 */}
-                  <TorrentFileList
-                    files={torrentInfo()!.files}
-                    selectedFiles={selectedFiles()}
-                    onSelectionChange={setSelectedFiles}
-                  />
-                  <Text fontSize="$xs" color="$neutral9" mt="$1">
-                    {t(
-                      "home.toolbar.offline_download_enhanced.file_selection_hint",
-                    )}
-                  </Text>
-                </VStack>
-              </Show>
-            </VStack>
-          </Show>
-
-          {/* 公共选项区域 */}
-          <VStack spacing="$2" mt="$3" alignItems="stretch">
-            {/* 保存路径 */}
-            <Box>
-              <Text fontSize="$sm" mb="$1" fontWeight="$medium">
-                {t("home.toolbar.offline_download_enhanced.save_path")}
-              </Text>
-              <FolderChooseInput
-                value={savePath()}
-                onChange={setSavePath}
-                id="offline-download-path"
-              />
-            </Box>
-
-            {/* 下载工具选择（CAS 秒传模式下隐藏） */}
-            <Show when={!shouldUseCasRapidUpload()}>
-              <Box>
-                <Text fontSize="$sm" mb="$1" fontWeight="$medium">
-                  {t("home.toolbar.offline_download_enhanced.download_tool")}
+          <Show when={verifiedResults()}>
+            {(result) => (
+              <Box
+                role="status"
+                aria-live="polite"
+                mb="$3"
+                p="$3"
+                bg="$warning3"
+                border="1px solid $warning7"
+                borderRadius="$md"
+              >
+                <Text fontWeight="$semibold">
+                  {result().created.length > 0
+                    ? t("home.toolbar.offline_download_enhanced.add_partial", {
+                        created: result().created.length,
+                        failed: result().failed.length,
+                      })
+                    : t(
+                        "home.toolbar.offline_download_enhanced.add_all_failed",
+                      )}
                 </Text>
-                <SelectWrapper
-                  value={
-                    shouldDisableSimpleHttp() && tool() === "SimpleHttp"
-                      ? availableTools()[0] || ""
-                      : tool()
-                  }
-                  onChange={(v) => {
-                    if (
-                      v !== "SimpleHttp" &&
-                      deletePolicy() === "upload_download_stream"
-                    ) {
-                      setDeletePolicy("delete_on_upload_succeed")
-                    }
-                    setTool(v)
-                  }}
-                  options={availableTools().map((t) => ({
-                    value: t,
-                    label: t,
-                  }))}
-                />
-                <Show
-                  when={
-                    shouldDisableSimpleHttp() && tools().includes("SimpleHttp")
-                  }
+                <Text fontSize="$sm" mt="$1">
+                  {t("home.toolbar.offline_download_enhanced.add_retry_hint")}
+                </Text>
+                <VStack
+                  alignItems="stretch"
+                  spacing="$2"
+                  mt="$2"
+                  maxH="280px"
+                  overflowY="auto"
                 >
-                  <Text fontSize="$xs" color="$neutral9" mt="$1">
-                    {t(
-                      "home.toolbar.offline_download_enhanced.simplehttp_not_supported",
+                  <For each={result().created}>
+                    {(item) => (
+                      <Box fontSize="$sm" css={{ overflowWrap: "anywhere" }}>
+                        <Text color="$success11">
+                          {t(
+                            "home.toolbar.offline_download_enhanced.add_task",
+                            {
+                              index: item.index + 1,
+                              id: item.taskId,
+                            },
+                          )}
+                        </Text>
+                        <Text>{item.url}</Text>
+                      </Box>
                     )}
+                  </For>
+                  <For each={result().failed}>
+                    {(item) => (
+                      <Box fontSize="$sm" css={{ overflowWrap: "anywhere" }}>
+                        <Text color="$danger11">
+                          {t(
+                            "home.toolbar.offline_download_enhanced.add_error",
+                            {
+                              index: item.index + 1,
+                              error: item.error,
+                            },
+                          )}
+                        </Text>
+                        <Text>{item.url}</Text>
+                      </Box>
+                    )}
+                  </For>
+                </VStack>
+                <Show when={result().created.length > 0}>
+                  <Text fontSize="$xs" mt="$2">
+                    {t("home.toolbar.offline_download_enhanced.add_hash_hint")}
                   </Text>
                 </Show>
               </Box>
-
-              {/* 删除策略 */}
-              <Box>
-                <Text fontSize="$sm" mb="$1" fontWeight="$medium">
-                  {t("home.toolbar.offline_download_enhanced.delete_policy")}
-                </Text>
-                <SelectWrapper
-                  value={deletePolicy()}
-                  onChange={(v) => setDeletePolicy(v as DeletePolicy)}
-                  options={deletePolicies
-                    .filter((policy) =>
-                      policy === "upload_download_stream"
-                        ? tool() === "SimpleHttp"
-                        : true,
-                    )
-                    .map((policy) => ({
-                      value: policy,
-                      label: t(`home.toolbar.delete_policy.${policy}`),
-                    }))}
-                />
-              </Box>
-            </Show>
-
-            {/* CAS 秒传提示 */}
-            <Show when={shouldUseCasRapidUpload()}>
+            )}
+          </Show>
+          <Show when={unknownResult()}>
+            {(result) => (
               <Box
-                p="$2"
-                bg="$success3"
-                borderRadius="$sm"
-                border="1px solid $success7"
+                role="alert"
+                mb="$3"
+                p="$3"
+                bg="$warning3"
+                border="1px solid $warning7"
+                borderRadius="$md"
               >
-                <Text fontSize="$sm" color="$success11">
-                  {t(
-                    "home.toolbar.offline_download_enhanced.cas_rapid_upload_mode",
-                  )}
+                <Text fontWeight="$semibold">
+                  {t("home.toolbar.offline_download_enhanced.add_unknown")}
                 </Text>
+                <Text fontSize="$sm" mt="$1">
+                  {t("home.toolbar.offline_download_enhanced.add_unknown_hint")}
+                </Text>
+                <Show when={result().taskIds.length > 0}>
+                  <Text fontSize="$sm" fontWeight="$medium" mt="$2">
+                    {t(
+                      "home.toolbar.offline_download_enhanced.add_reported_ids",
+                    )}
+                  </Text>
+                  <Box maxH="140px" overflowY="auto">
+                    <For each={result().taskIds}>
+                      {(id) => (
+                        <Text fontSize="$sm" css={{ overflowWrap: "anywhere" }}>
+                          {id}
+                        </Text>
+                      )}
+                    </For>
+                  </Box>
+                </Show>
               </Box>
-              {/* 生成 CAS 文件按钮 */}
+            )}
+          </Show>
+          <Show when={verifiedResults() || unknownResult()}>
+            <Button
+              as="a"
+              role="link"
+              href={joinBase("/@manage/tasks/offline_download")}
+              target="_blank"
+              rel="noopener noreferrer"
+              variant="outline"
+              size="sm"
+              mb="$3"
+            >
+              {t("home.toolbar.offline_download_enhanced.add_view_tasks")}
+            </Button>
+          </Show>
+          <fieldset
+            disabled={editingLocked()}
+            aria-busy={submitting()}
+            style={{ border: "0", margin: "0", padding: "0", "min-width": "0" }}
+          >
+            {/* Tab 切换 */}
+            <HStack spacing="$2" mb="$3">
               <Button
                 size="sm"
-                variant="outline"
-                onClick={handleGenerateCASFile}
+                variant={activeTab() === "link" ? "solid" : "outline"}
+                onClick={() => !editingLocked() && setActiveTab("link")}
               >
-                {t("home.toolbar.offline_download_enhanced.generate_cas_file")}
+                {t("home.toolbar.offline_download_enhanced.tab_link")}
               </Button>
-            </Show>
-
-            {/* CAS 秒传失败后，提示用户可继续普通离线下载 */}
-            <Show
-              when={
-                activeTab() === "torrent" &&
-                torrentInfo()?.has_cas &&
-                casRapidUploadFailed()
-              }
-            >
-              <Box
-                p="$2"
-                bg="$warning3"
-                borderRadius="$sm"
-                border="1px solid $warning7"
+              <Button
+                size="sm"
+                variant={activeTab() === "torrent" ? "solid" : "outline"}
+                onClick={() => !editingLocked() && setActiveTab("torrent")}
               >
-                <Text fontSize="$sm" color="$warning11">
-                  {t(
-                    "home.toolbar.offline_download_enhanced.cas_failed_fallback_hint",
+                {t("home.toolbar.offline_download_enhanced.tab_bt")}
+              </Button>
+            </HStack>
+
+            {/* 链接下载 Tab */}
+            <Show when={activeTab() === "link"}>
+              <VStack spacing="$2" alignItems="stretch">
+                <Textarea
+                  placeholder={t(
+                    "home.toolbar.offline_download_enhanced.link_placeholder",
                   )}
+                  value={linkValue()}
+                  onInput={(e) => {
+                    if (!editingLocked()) setLinkValue(e.currentTarget.value)
+                  }}
+                  minH="120px"
+                />
+                <Text fontSize="$xs" color="$neutral10">
+                  {t("home.toolbar.offline_download_enhanced.link_tips")}
                 </Text>
-              </Box>
+              </VStack>
             </Show>
 
-            <Show
-              when={
-                activeTab() === "torrent" &&
-                torrentInfo() &&
-                !torrentInfo()!.has_cas
-              }
-            >
-              <Box
-                p="$2"
-                bg="$warning3"
-                borderRadius="$sm"
-                border="1px solid $warning7"
-              >
-                <Text fontSize="$sm" color="$warning11">
-                  {t("home.toolbar.offline_download_enhanced.no_cas_hint")}
-                </Text>
-              </Box>
+            {/* BT 下载 Tab */}
+            <Show when={activeTab() === "torrent"}>
+              <VStack spacing="$3" alignItems="stretch">
+                {/* 未解析时显示上传区域 */}
+                <Show when={!torrentInfo()}>
+                  <Box
+                    border="2px dashed $neutral7"
+                    borderRadius="$md"
+                    p="$6"
+                    textAlign="center"
+                    cursor="pointer"
+                    onClick={handleFileSelect}
+                    _hover={{ borderColor: "$primary9", bg: "$primary3" }}
+                  >
+                    <Show
+                      when={parsing()}
+                      fallback={
+                        <VStack spacing="$2">
+                          <Text fontSize="$lg" fontWeight="$bold">
+                            {t(
+                              "home.toolbar.offline_download_enhanced.drop_torrent",
+                            )}
+                          </Text>
+                          <Text fontSize="$sm" color="$neutral10">
+                            {t(
+                              "home.toolbar.offline_download_enhanced.click_to_select",
+                            )}
+                          </Text>
+                        </VStack>
+                      }
+                    >
+                      <Text>
+                        {t("home.toolbar.offline_download_enhanced.parsing")}
+                      </Text>
+                    </Show>
+                  </Box>
+                </Show>
+
+                {/* 已解析时显示文件列表 */}
+                <Show when={torrentInfo()}>
+                  <VStack spacing="$2" alignItems="stretch">
+                    {/* 种子信息头部 */}
+                    <HStack justifyContent="space-between" alignItems="center">
+                      <VStack alignItems="flex-start" spacing="$1">
+                        <Heading size="sm" css={{ wordBreak: "break-all" }}>
+                          {torrentInfo()!.name}
+                        </Heading>
+                        <HStack spacing="$2">
+                          <Text fontSize="$xs" color="$neutral10">
+                            {formatFileSize(torrentInfo()!.total_size)}
+                          </Text>
+                          <Text fontSize="$xs" color="$neutral10">
+                            {torrentInfo()!.files.length}{" "}
+                            {t(
+                              "home.toolbar.offline_download_enhanced.files_count",
+                            )}
+                          </Text>
+                        </HStack>
+                      </VStack>
+                      <HStack spacing="$2">
+                        <Show when={torrentInfo()!.has_cas}>
+                          <Badge colorScheme="success">
+                            {t(
+                              "home.toolbar.offline_download_enhanced.cas_supported",
+                            )}
+                          </Badge>
+                        </Show>
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          onClick={() => {
+                            if (editingLocked()) return
+                            setTorrentInfo(null)
+                            setTorrentData("")
+                            setSelectedFiles([])
+                          }}
+                        >
+                          {t("home.toolbar.offline_download_enhanced.reselect")}
+                        </Button>
+                      </HStack>
+                    </HStack>
+
+                    {/* 文件列表 */}
+                    <TorrentFileList
+                      files={torrentInfo()!.files}
+                      selectedFiles={selectedFiles()}
+                      onSelectionChange={(files) => {
+                        if (!editingLocked()) setSelectedFiles(files)
+                      }}
+                    />
+                    <Text fontSize="$xs" color="$neutral9" mt="$1">
+                      {t(
+                        "home.toolbar.offline_download_enhanced.file_selection_hint",
+                      )}
+                    </Text>
+                  </VStack>
+                </Show>
+              </VStack>
             </Show>
 
-            {/* ed2k 链接工具提示 */}
-            <Show
-              when={
-                activeTab() === "link" &&
-                hasEd2kLinks() &&
-                (tool() === "aria2" ||
-                  tool() === "SimpleHttp" ||
-                  tool() === "qBittorrent")
-              }
-            >
-              <Box
-                p="$2"
-                bg="$warning3"
-                borderRadius="$sm"
-                border="1px solid $warning7"
-              >
-                <Text fontSize="$sm" color="$warning11">
-                  {t("home.toolbar.offline_download_enhanced.ed2k_tool_hint")}
+            {/* 公共选项区域 */}
+            <VStack spacing="$2" mt="$3" alignItems="stretch">
+              {/* 保存路径 */}
+              <Box>
+                <Text fontSize="$sm" mb="$1" fontWeight="$medium">
+                  {t("home.toolbar.offline_download_enhanced.save_path")}
                 </Text>
+                <FolderChooseInput
+                  value={savePath()}
+                  onChange={(path) => {
+                    if (!editingLocked()) setSavePath(path)
+                  }}
+                  id="offline-download-path"
+                />
               </Box>
-            </Show>
-          </VStack>
+
+              {/* 下载工具选择（CAS 秒传模式下隐藏） */}
+              <Show when={!shouldUseCasRapidUpload()}>
+                <Box>
+                  <Text fontSize="$sm" mb="$1" fontWeight="$medium">
+                    {t("home.toolbar.offline_download_enhanced.download_tool")}
+                  </Text>
+                  <SelectWrapper
+                    value={
+                      shouldDisableSimpleHttp() && tool() === "SimpleHttp"
+                        ? availableTools()[0] || ""
+                        : tool()
+                    }
+                    onChange={(v) => {
+                      if (editingLocked()) return
+                      setTool(v)
+                    }}
+                    options={availableTools().map((t) => ({
+                      value: t,
+                      label: t,
+                    }))}
+                  />
+                  <Show
+                    when={
+                      shouldDisableSimpleHttp() &&
+                      tools().includes("SimpleHttp")
+                    }
+                  >
+                    <Text fontSize="$xs" color="$neutral9" mt="$1">
+                      {t(
+                        "home.toolbar.offline_download_enhanced.simplehttp_not_supported",
+                      )}
+                    </Text>
+                  </Show>
+                </Box>
+
+                {/* 删除策略 */}
+                <Box>
+                  <Text fontSize="$sm" mb="$1" fontWeight="$medium">
+                    {t("home.toolbar.offline_download_enhanced.delete_policy")}
+                  </Text>
+                  <SelectWrapper
+                    value={deletePolicy()}
+                    onChange={(v) => {
+                      if (!editingLocked()) setDeletePolicy(v as DeletePolicy)
+                    }}
+                    options={deletePolicies
+                      .filter((policy) =>
+                        policy === "upload_download_stream"
+                          ? tool() === "SimpleHttp"
+                          : true,
+                      )
+                      .map((policy) => ({
+                        value: policy,
+                        label: t(`home.toolbar.delete_policy.${policy}`),
+                      }))}
+                  />
+                </Box>
+              </Show>
+
+              {/* CAS 秒传提示 */}
+              <Show when={shouldUseCasRapidUpload()}>
+                <Box
+                  p="$2"
+                  bg="$success3"
+                  borderRadius="$sm"
+                  border="1px solid $success7"
+                >
+                  <Text fontSize="$sm" color="$success11">
+                    {t(
+                      "home.toolbar.offline_download_enhanced.cas_rapid_upload_mode",
+                    )}
+                  </Text>
+                </Box>
+                {/* 生成 CAS 文件按钮 */}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleGenerateCASFile}
+                >
+                  {t(
+                    "home.toolbar.offline_download_enhanced.generate_cas_file",
+                  )}
+                </Button>
+              </Show>
+
+              {/* CAS 秒传失败后，提示用户可继续普通离线下载 */}
+              <Show
+                when={
+                  activeTab() === "torrent" &&
+                  torrentInfo()?.has_cas &&
+                  casRapidUploadFailed()
+                }
+              >
+                <Box
+                  p="$2"
+                  bg="$warning3"
+                  borderRadius="$sm"
+                  border="1px solid $warning7"
+                >
+                  <Text fontSize="$sm" color="$warning11">
+                    {t(
+                      "home.toolbar.offline_download_enhanced.cas_failed_fallback_hint",
+                    )}
+                  </Text>
+                </Box>
+              </Show>
+
+              <Show
+                when={
+                  activeTab() === "torrent" &&
+                  torrentInfo() &&
+                  !torrentInfo()!.has_cas
+                }
+              >
+                <Box
+                  p="$2"
+                  bg="$warning3"
+                  borderRadius="$sm"
+                  border="1px solid $warning7"
+                >
+                  <Text fontSize="$sm" color="$warning11">
+                    {t("home.toolbar.offline_download_enhanced.no_cas_hint")}
+                  </Text>
+                </Box>
+              </Show>
+
+              {/* ed2k 链接工具提示 */}
+              <Show
+                when={
+                  activeTab() === "link" &&
+                  hasEd2kLinks() &&
+                  (tool() === "aria2" ||
+                    tool() === "SimpleHttp" ||
+                    tool() === "qBittorrent")
+                }
+              >
+                <Box
+                  p="$2"
+                  bg="$warning3"
+                  borderRadius="$sm"
+                  border="1px solid $warning7"
+                >
+                  <Text fontSize="$sm" color="$warning11">
+                    {t("home.toolbar.offline_download_enhanced.ed2k_tool_hint")}
+                  </Text>
+                </Box>
+              </Show>
+            </VStack>
+          </fieldset>
         </ModalBody>
 
         <ModalFooter display="flex" gap="$2">
-          <Button onClick={handleClose} colorScheme="neutral">
+          <Button
+            onClick={handleClose}
+            colorScheme="neutral"
+            disabled={submitting() || parsing()}
+          >
             {t("global.cancel")}
           </Button>
           <Show when={activeTab() === "link"}>
             <Button
               loading={linkLoading()}
               onClick={handleLinkSubmit}
-              disabled={!linkValue().trim()}
+              disabled={editingLocked() || !linkValue().trim()}
             >
-              {t("home.toolbar.offline_download_enhanced.start_download")}
+              {t(
+                verifiedResults()
+                  ? "home.toolbar.offline_download_enhanced.add_retry"
+                  : "home.toolbar.offline_download_enhanced.start_download",
+              )}
             </Button>
           </Show>
           <Show when={activeTab() === "torrent"}>
             <Button
               loading={btLoading() || rapidUploading()}
               onClick={handleBtSubmit}
-              disabled={!torrentInfo()}
+              disabled={editingLocked() || !torrentInfo()}
             >
               <Show
                 when={shouldUseCasRapidUpload() && !rapidUploading()}
