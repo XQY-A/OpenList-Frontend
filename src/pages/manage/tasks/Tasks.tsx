@@ -31,6 +31,7 @@ import {
   TaskDeleteAction,
   TaskDeleteRequest,
 } from "./deletion"
+import { createTaskRefresh } from "./refresh"
 
 export interface TaskNameAnalyzer {
   regex: RegExp
@@ -74,7 +75,6 @@ const undoneStatePriority: Record<number, number> = {
 export const Tasks = (props: TasksProps) => {
   const t = useT()
   const [loading, setLoading] = createSignal(false)
-  let pendingRefreshes = 0
   const [tasks, setTasks] = createSignal<TaskAttribute[]>([])
   const [deleteRequest, setDeleteRequest] = createSignal<TaskDeleteRequest>()
   const [preparingDelete, setPreparingDelete] = createSignal(false)
@@ -117,19 +117,19 @@ export const Tasks = (props: TasksProps) => {
       return (orderReverse() ? -1 : 1) * sorter[orderBy()](a, b)
     }
   })
-  const refresh = async () => {
+  const fetchTasks = async () => {
     const version = ++refreshVersion
-    ++pendingRefreshes
     setLoading(true)
     let resp: Resp<TaskInfo[]>
     try {
       resp = await r.get(`/task/${props.type}/${props.done}`)
     } catch {
-      notify.error(t("tasks.delete_dialog.refresh_failed"))
+      if (version === refreshVersion) {
+        notify.error(t("tasks.delete_dialog.refresh_failed"))
+      }
       return false
     } finally {
-      --pendingRefreshes
-      setLoading(pendingRefreshes > 0)
+      setLoading(false)
     }
     if (version !== refreshVersion) return true
     if (resp.code !== 200 || !Array.isArray(resp.data)) {
@@ -181,6 +181,12 @@ export const Tasks = (props: TasksProps) => {
     })
     return true
   }
+  const taskRefresh = createTaskRefresh(fetchTasks, props.done === "undone")
+  const refresh = taskRefresh.refresh
+  const refreshAfterChange = () => {
+    ++refreshVersion
+    return taskRefresh.refreshAfterChange()
+  }
   const removeDeleted = (ids: string[]) => {
     ++refreshVersion
     ids.forEach((id) => removedIds.add(id))
@@ -216,11 +222,11 @@ export const Tasks = (props: TasksProps) => {
     }
     setDeleteRequest({ action, targets })
   }
+  onCleanup(() => {
+    ++refreshVersion
+    taskRefresh.dispose()
+  })
   refresh()
-  if (props.done === "undone") {
-    const interval = setInterval(refresh, 2000)
-    onCleanup(() => clearInterval(interval))
-  }
   const [retryFailedLoading, retryFailed] = useFetch((): PEmptyResp =>
     r.post(`/task/${props.type}/retry_failed`),
   )
@@ -359,7 +365,7 @@ export const Tasks = (props: TasksProps) => {
               disabled={deletionBusy()}
               onClick={async () => {
                 const resp = await retryFailed()
-                handleResp(resp, () => refresh())
+                handleResp(resp, () => refreshAfterChange())
               }}
             >
               {t(`tasks.retry_failed`)}
@@ -390,7 +396,7 @@ export const Tasks = (props: TasksProps) => {
               const resp = await retrySelected()
               handleResp(resp, (data) => {
                 notifyIndividualError(data)
-                refresh()
+                refreshAfterChange()
               })
             }}
           >
@@ -412,7 +418,7 @@ export const Tasks = (props: TasksProps) => {
             const resp = await operateSelected()
             handleResp(resp, (data) => {
               notifyIndividualError(data)
-              refresh()
+              refreshAfterChange()
             })
           }}
         >
@@ -506,7 +512,7 @@ export const Tasks = (props: TasksProps) => {
               setTasks((current) =>
                 current.filter((item) => item.id !== task.id),
               )
-              refresh()
+              refreshAfterChange()
             }}
           />
         ))}
@@ -528,7 +534,7 @@ export const Tasks = (props: TasksProps) => {
             request={request}
             onClose={() => setDeleteRequest(undefined)}
             onDeleted={removeDeleted}
-            refresh={refresh}
+            refresh={refreshAfterChange}
           />
         )}
       </Show>
