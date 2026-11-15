@@ -67,6 +67,8 @@ class GitHub:
         if token and not public:
             headers["Authorization"] = "Bearer " + token
         payload = None if body is None else json.dumps(body).encode()
+        if payload is not None:
+            headers["Content-Type"] = "application/json"
         request = urllib.request.Request(
             "https://api.github.com/" + path, data=payload, method=method, headers=headers,
         )
@@ -226,14 +228,18 @@ def prepare(result_path, dry_run=False):
         timestamps = [int(git("show", "-s", "--format=%ct", sha).stdout) for sha in (base, upstream, frontend) if sha]
         # A retry of the same inputs produces the same commit and never needs a force push.
         stamp = str(max(timestamps) + 1) + " +0000"
-        message = f"chore(sync): merge verified upstream inputs\n\n- Integrate {config['upstream_repository']} at {upstream}.\n- Record the upstream checkpoint for subsequent synchronization."
+        if checkpoint != upstream:
+            message = f"chore(sync): merge verified upstream inputs\n\n- Integrate {config['upstream_repository']} at {upstream}.\n- Record the upstream checkpoint for subsequent synchronization."
+        else:
+            message = "chore(sync): update the verified frontend pin\n"
         if pin_changed:
             message += f"\n- Pin the validated personal frontend at {frontend}."
         git("commit", "-m", message, env={"GIT_AUTHOR_DATE": stamp, "GIT_COMMITTER_DATE": stamp})
     state["candidate_sha"] = git("rev-parse", "HEAD").stdout.strip()
     state["candidate_branch"] = "codex/sync-upstream/" + "-".join(sha[:12] for sha in (base, upstream, frontend) if sha)
     git("push", "origin", f"HEAD:refs/heads/{state['candidate_branch']}")
-    pull = api.pull_request(state["candidate_branch"], branch, "chore(sync): integrate upstream updates", pr_body(state))
+    title = "chore(sync): integrate upstream updates" if checkpoint != upstream else "chore(sync): update the verified frontend pin"
+    pull = api.pull_request(state["candidate_branch"], branch, title, pr_body(state))
     state["pr_number"], state["pr_url"] = pull["number"], pull["html_url"]
     state["message"] = "Candidate prepared; validation and review rules control acceptance."
     save_result(result_path, state)
