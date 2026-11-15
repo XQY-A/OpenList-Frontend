@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [custom/115]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      source_sha:
+        type: string
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -19,6 +25,8 @@ jobs:
         with:
           fetch-depth: 0
           submodules: recursive
+          persist-credentials: false
+          ref: ${{ inputs.source_sha || '' }}
 
       - name: Setup Node
         uses: actions/setup-node@v7
@@ -30,6 +38,9 @@ jobs:
         with:
           version: "11.28.11"
           run_install: false
+
+      - name: Check sync behavior
+        run: python3 -B -m unittest discover -s tests -p 'test_sync_custom_115.py' -v
 
       - name: Install locked dependencies
         run: pnpm install --frozen-lockfile
@@ -52,6 +63,6 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v7
         with:
-          name: openlist-frontend-custom-115-${{ github.sha }}
+          name: openlist-frontend-custom-115-${{ inputs.source_sha || github.sha }}
           path: dist/
           retention-days: 14

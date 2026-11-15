@@ -1,0 +1,29 @@
+{
+  "repository": "XQY-A/OpenList-Frontend",
+  "upstream_repository": "OpenListTeam/OpenList-Frontend",
+  "branch": "custom/115",
+  "upstream_commit": "9a57baf8690dbdb934d64995159d257b4b416ec8",
+  "automatic_paths": [
+    "docs/**",
+    "README*",
+    "src/lang/**"
+  ],
+  "review_paths": [
+    "src/pages/manage/tasks/**",
+    "src/types/**",
+    "src/utils/**",
+    "src/components/**",
+    "src/hooks/**",
+    "src/context/**",
+    "src/stores/**",
+    "src/lang-overrides/**",
+    "src/lang/en/tasks.json",
+    "package.json",
+    "pnpm*",
+    "scripts/**",
+    "tests/**",
+    "build*",
+    ".github/**",
+    "AGENTS*"
+  ]
+}

@@ -1,0 +1,88 @@
+name: Sync Personal 115 Upstream
+
+on:
+  schedule:
+    - cron: "17 19 * * *" # 03:17 Asia/Shanghai.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: custom-115-upstream-sync
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  prepare:
+    if: github.repository == 'XQY-A/OpenList-Frontend' && github.ref == 'refs/heads/custom/115'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      changed: ${{ steps.sync.outputs.changed }}
+      mergeable: ${{ steps.sync.outputs.mergeable }}
+      candidate_sha: ${{ steps.sync.outputs.candidate_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Prepare candidate and compatibility review PR
+        id: sync
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/sync_custom_115.py prepare --result "$RUNNER_TEMP/sync-state.json"
+
+      - name: Save immutable candidate state
+        if: steps.sync.outputs.changed == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: custom-115-sync-state
+          path: ${{ runner.temp }}/sync-state.json
+          retention-days: 14
+
+  validate:
+    needs: prepare
+    if: needs.prepare.outputs.changed == 'true' && needs.prepare.outputs.mergeable == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build_custom_115.yml
+    with:
+      source_sha: ${{ needs.prepare.outputs.candidate_sha }}
+
+  finalize:
+    needs: [prepare, validate]
+    if: always() && needs.prepare.result == 'success' && needs.prepare.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      statuses: write
+    outputs:
+      accepted: ${{ steps.accept.outputs.accepted }}
+    steps:
+      - name: Checkout the trusted orchestration source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: custom-115-sync-state
+          path: ${{ runner.temp }}
+
+      - name: Record validation and accept only eligible fast-forwards
+        id: accept
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VALIDATION_RESULT: ${{ needs.validate.result }}
+        run: python3 -B scripts/sync_custom_115.py finalize --result "$RUNNER_TEMP/sync-state.json" --validation "$VALIDATION_RESULT"
