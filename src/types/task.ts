@@ -11,6 +11,7 @@ export interface TaskInfo {
   total_bytes: number
   error: string
   tool?: string
+  source_url?: string
   info_hash?: string
   submission_state?: string
   cloud_delete_state?: string

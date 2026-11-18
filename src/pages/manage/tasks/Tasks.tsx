@@ -36,7 +36,9 @@ import { createTaskRefresh } from "./refresh"
 export interface TaskNameAnalyzer {
   regex: RegExp
   title: (matches: RegExpMatchArray) => string
-  attrs: { [attr: string]: (matches: RegExpMatchArray) => JSX.Element }
+  attrs: {
+    [attr: string]: (matches: RegExpMatchArray, task: TaskInfo) => JSX.Element
+  }
 }
 
 export interface TasksProps {
@@ -246,7 +248,11 @@ export const Tasks = (props: TasksProps) => {
     const regex = regexFilter()
     const mine = showOnlyMine()
     return (task: TaskInfo): boolean =>
-      regex.test(task.name) && (!mine || task.creator === me().username)
+      (regex.test(task.name) ||
+        (task.tool === "115 Open" &&
+          !!task.source_url &&
+          regex.test(task.source_url))) &&
+      (!mine || task.creator === me().username)
   })
   const filteredTask = createMemo(() => {
     return tasks().filter(taskFilter())

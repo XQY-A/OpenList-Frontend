@@ -317,7 +317,7 @@ export const Task = (
             <Show when={matches !== null}>
               <For each={Object.entries(props.nameAnalyzer.attrs)}>
                 {(entry) => {
-                  const value = entry[1](matches as RegExpMatchArray)
+                  const value = entry[1](matches as RegExpMatchArray, props)
                   return value === undefined ? null : (
                     <Show when={entry[1] !== undefined}>
                       <GridItem

@@ -33,17 +33,21 @@ export const getOfflineDownloadNameAnalyzer = (): TaskNameAnalyzer => {
     regex: /^download (.+) to \((.+)\)$/,
     title: (matches) => matches[1],
     attrs: {
-      [t(`tasks.attr.offline_download.url`)]: (matches) => (
-        <a
-          style={underline() ? "text-decoration: underline" : ""}
-          onMouseOver={() => setUnderline(true)}
-          onMouseOut={() => setUnderline(false)}
-          href={matches[1]}
-          target="_blank"
-        >
-          {matches[1]}
-        </a>
-      ),
+      [t(`tasks.attr.offline_download.url`)]: (matches, task) => {
+        const url =
+          task.tool === "115 Open" ? task.source_url || matches[1] : matches[1]
+        return (
+          <a
+            style={underline() ? "text-decoration: underline" : ""}
+            onMouseOver={() => setUnderline(true)}
+            onMouseOut={() => setUnderline(false)}
+            href={url}
+            target="_blank"
+          >
+            {url}
+          </a>
+        )
+      },
       [t(`tasks.attr.offline_download.path`)]: (matches) =>
         getPath("", matches[2]),
     },
