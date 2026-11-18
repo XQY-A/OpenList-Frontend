@@ -21,6 +21,7 @@ import {
   confirmedDeletedTaskIds,
   isClearAction,
   parseTaskDeleteResponse,
+  sourceFileDeleteUnavailableReason,
   TaskDeleteRequest,
   TaskDeleteResult,
 } from "./deletion"
@@ -35,12 +36,18 @@ export const DeleteTasksDialog = (props: {
   const t = useT()
   const cancelId = createUniqueId()
   const [cloud, setCloud] = createSignal(false)
+  const [sourceFiles, setSourceFiles] = createSignal(false)
   const [submitting, setSubmitting] = createSignal(false)
   const [results, setResults] = createSignal<TaskDeleteResult[]>()
   const [requestError, setRequestError] = createSignal("")
   const eligible = createMemo(() =>
     props.request.targets.filter(
       (task) => !cloudDeleteUnavailableReason(task, props.type),
+    ),
+  )
+  const sourceFileEligible = createMemo(() =>
+    props.request.targets.filter(
+      (task) => !sourceFileDeleteUnavailableReason(task, props.type),
     ),
   )
   const successCount = createMemo(
@@ -60,6 +67,7 @@ export const DeleteTasksDialog = (props: {
       query.set("tid", props.request.targets[0].id)
     }
     if (cloud()) query.set("delete_cloud_record", "true")
+    if (cloud() && sourceFiles()) query.set("delete_source_file", "true")
     try {
       const response: Resp<unknown> = await r.post(
         `/task/${props.type}/${props.request.action}?${query}`,
@@ -67,7 +75,12 @@ export const DeleteTasksDialog = (props: {
           ? props.request.targets.map((task) => task.id)
           : undefined,
       )
-      const outcome = parseTaskDeleteResponse(response, props.request, cloud())
+      const outcome = parseTaskDeleteResponse(
+        response,
+        props.request,
+        cloud(),
+        sourceFiles(),
+      )
       setResults(outcome)
       props.onDeleted(confirmedDeletedTaskIds(outcome))
     } catch {
@@ -120,12 +133,30 @@ export const DeleteTasksDialog = (props: {
               <Checkbox
                 checked={cloud()}
                 disabled={submitting() || eligible().length === 0}
-                onChange={(event) => setCloud(event.currentTarget.checked)}
+                onChange={(event) => {
+                  setCloud(event.currentTarget.checked)
+                  if (!event.currentTarget.checked) setSourceFiles(false)
+                }}
               >
                 {t("tasks.delete_dialog.delete_cloud")}
               </Checkbox>
+              <Checkbox
+                checked={sourceFiles()}
+                disabled={
+                  submitting() || !cloud() || sourceFileEligible().length === 0
+                }
+                onChange={(event) =>
+                  setSourceFiles(event.currentTarget.checked)
+                }
+              >
+                {t("tasks.delete_dialog.delete_source_files")}
+              </Checkbox>
               <Text size="sm" color="$neutral11">
-                {t("tasks.delete_dialog.keep_files")}
+                {t(
+                  sourceFiles()
+                    ? "tasks.delete_dialog.delete_files_notice"
+                    : "tasks.delete_dialog.keep_files",
+                )}
               </Text>
               <Show when={cloud()}>
                 <Text size="sm" color="$warning11">
@@ -150,12 +181,24 @@ export const DeleteTasksDialog = (props: {
                         </Text>
                         <Show when={props.type === "offline_download"}>
                           <Text size="sm" color="$neutral11">
-                            {cloudDeleteUnavailableReason(task, props.type)
-                              ? reasonText(
-                                  cloudDeleteUnavailableReason(
+                            {(
+                              sourceFiles()
+                                ? sourceFileDeleteUnavailableReason(
                                     task,
                                     props.type,
-                                  ),
+                                  )
+                                : cloudDeleteUnavailableReason(task, props.type)
+                            )
+                              ? reasonText(
+                                  sourceFiles()
+                                    ? sourceFileDeleteUnavailableReason(
+                                        task,
+                                        props.type,
+                                      )
+                                    : cloudDeleteUnavailableReason(
+                                        task,
+                                        props.type,
+                                      ),
                                 )
                               : t("tasks.delete_dialog.available")}
                           </Text>
@@ -217,6 +260,23 @@ export const DeleteTasksDialog = (props: {
                             )}
                           </Text>
                         </Show>
+                        <Show
+                          when={
+                            cloud() &&
+                            (sourceFiles() ||
+                              (result.source_file_delete_state &&
+                                result.source_file_delete_state !== "none"))
+                          }
+                        >
+                          <Text size="sm" color="$neutral11">
+                            {t("tasks.source_file_status_label")}:{" "}
+                            {t(
+                              `tasks.source_file_state.${result.source_file_delete_state ?? "unknown"}`,
+                              undefined,
+                              result.source_file_delete_state,
+                            )}
+                          </Text>
+                        </Show>
                       </Box>
                     )}
                   </For>
@@ -231,7 +291,12 @@ export const DeleteTasksDialog = (props: {
           </VStack>
         </ModalBody>
         <ModalFooter>
-          <HStack spacing="$2">
+          <HStack
+            w="$full"
+            spacing="$2"
+            justifyContent="flex-end"
+            flexWrap="wrap"
+          >
             <Button
               id={cancelId}
               colorScheme="neutral"
@@ -243,12 +308,19 @@ export const DeleteTasksDialog = (props: {
             <Show when={!results()}>
               <Button
                 colorScheme="danger"
+                maxW="$full"
+                css={{ whiteSpace: "normal" }}
+                height="auto"
+                minH="$10"
+                py="$2"
                 loading={submitting()}
                 disabled={submitting() || props.request.targets.length === 0}
                 onClick={submit}
               >
                 {cloud()
-                  ? t("tasks.delete_dialog.confirm_cloud")
+                  ? sourceFiles()
+                    ? t("tasks.delete_dialog.confirm_cloud_files")
+                    : t("tasks.delete_dialog.confirm_cloud")
                   : t("tasks.delete_dialog.confirm_local")}
               </Button>
             </Show>

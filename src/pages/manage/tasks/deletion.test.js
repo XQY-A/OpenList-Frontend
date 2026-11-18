@@ -5,6 +5,7 @@ import {
   cloudDeleteUnavailableReason,
   confirmedDeletedTaskIds,
   parseTaskDeleteResponse,
+  sourceFileDeleteUnavailableReason,
 } from "./deletion.ts"
 
 const task = (id, extra = {}) => ({
@@ -257,4 +258,146 @@ test("cloud cleanup uses the server tool and capability, never a display name or
     ),
     "account_changed",
   )
+})
+
+test("source file deletion requires an explicit server capability and cloud eligibility", () => {
+  const reason = (extra = {}, type = "offline_download") =>
+    sourceFileDeleteUnavailableReason(
+      task("a", { can_delete_source_file: true, ...extra }),
+      type,
+    )
+  assert.equal(reason(), "")
+  for (const value of [undefined, false, "true", 1]) {
+    assert.equal(
+      reason({ can_delete_source_file: value }),
+      "source_file_capability_unavailable",
+    )
+  }
+  assert.equal(reason({ tool: "115 Cloud" }), "unsupported_tool")
+  assert.equal(reason({}, "offline_download_transfer"), "unsupported_tool")
+  assert.equal(
+    reason({
+      can_delete_cloud_record: false,
+      cloud_delete_unavailable_reason: "account_changed",
+    }),
+    "account_changed",
+  )
+})
+
+test("all four deletion actions require a confirmed file result when files are requested", () => {
+  for (const action of [
+    "delete",
+    "delete_some",
+    "clear_done",
+    "clear_succeeded",
+  ]) {
+    const result = {
+      ...removed("a"),
+      source_file_delete_state: "deleted",
+    }
+    const response = {
+      code: 200,
+      data: action === "delete" ? result : { results: [result] },
+    }
+    assert.deepEqual(
+      confirmedDeletedTaskIds(
+        parseTaskDeleteResponse(response, request(action, "a"), true, true),
+      ),
+      ["a"],
+      action,
+    )
+    const oldResult = removed("a")
+    response.data = action === "delete" ? oldResult : { results: [oldResult] }
+    const unconfirmed = parseTaskDeleteResponse(
+      response,
+      request(action, "a"),
+      true,
+      true,
+    )
+    assert.deepEqual(confirmedDeletedTaskIds(unconfirmed), [], action)
+    assert.equal(unconfirmed[0].cloud_state, "deleted", action)
+    assert.equal(unconfirmed[0].source_file_delete_state, "unknown", action)
+    assert.equal(
+      unconfirmed[0].reason,
+      "source_file_delete_unconfirmed",
+      action,
+    )
+  }
+})
+
+test("unconfirmed and malformed file acknowledgements cannot remove a task", () => {
+  for (const fileState of ["none", "deleting", "unknown", "invalid", null, 1]) {
+    const results = parseTaskDeleteResponse(
+      {
+        code: 200,
+        data: { ...removed("a"), source_file_delete_state: fileState },
+      },
+      request("delete", "a"),
+      true,
+      true,
+    )
+    assert.deepEqual(confirmedDeletedTaskIds(results), [], String(fileState))
+    assert.equal(results[0].code, 500, String(fileState))
+  }
+})
+
+test("file deletion and local persistence failures retain their separate cloud evidence", () => {
+  const results = parseTaskDeleteResponse(
+    {
+      code: 200,
+      data: {
+        results: [
+          { ...removed("success"), source_file_delete_state: "deleted" },
+          {
+            task_id: "file-unknown",
+            local_deleted: false,
+            cloud_state: "deleted",
+            source_file_delete_state: "unknown",
+            code: 409,
+            reason: "source_file_delete_unconfirmed",
+          },
+          {
+            task_id: "db-failure",
+            local_deleted: false,
+            cloud_state: "deleted",
+            source_file_delete_state: "deleted",
+            code: 500,
+            reason: "persistence_failed",
+          },
+        ],
+      },
+    },
+    request("delete_some", "success", "file-unknown", "db-failure"),
+    true,
+    true,
+  )
+  assert.deepEqual(confirmedDeletedTaskIds(results), ["success"])
+  assert.equal(results[1].cloud_state, "deleted")
+  assert.equal(results[1].source_file_delete_state, "unknown")
+  assert.equal(results[1].reason, "source_file_delete_unconfirmed")
+  assert.equal(results[2].cloud_state, "deleted")
+  assert.equal(results[2].source_file_delete_state, "deleted")
+  assert.equal(results[2].reason, "persistence_failed")
+})
+
+test("empty and lost responses retain an unknown source file result", () => {
+  for (const response of [
+    { code: 200, data: null },
+    { code: undefined, message: "Network Error" },
+  ]) {
+    const results = parseTaskDeleteResponse(
+      response,
+      request("delete_some", "a", "b"),
+      true,
+      true,
+    )
+    assert.deepEqual(confirmedDeletedTaskIds(results), [])
+    assert.ok(
+      results.every(
+        (result) =>
+          result.cloud_state === "unknown" &&
+          result.source_file_delete_state === "unknown",
+      ),
+    )
+  }
 })

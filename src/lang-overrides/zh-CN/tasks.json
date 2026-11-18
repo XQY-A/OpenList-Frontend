@@ -4,6 +4,7 @@
   "receipt_pending": "暂无已确认的 115 回执",
   "submission_status_label": "115 提交状态",
   "cloud_status_label": "云端记录清理",
+  "source_file_status_label": "源文件删除",
   "submission_state": {
     "pending": "等待提交",
     "submitting": "正在提交",
@@ -18,9 +19,18 @@
     "unknown": "清理结果未知",
     "deleted": "已确认云端记录不存在"
   },
+  "source_file_state": {
+    "none": "未请求删除",
+    "deleting": "正在删除源文件",
+    "unknown": "源文件删除未确认",
+    "deleted": "已确认删除源文件"
+  },
   "cloud_reason": {
     "unsupported_tool": "此任务类型或下载工具不支持清理 115 云端记录。",
     "capability_unavailable": "服务端未确认此任务支持云端记录清理。",
+    "source_file_capability_unavailable": "服务端未确认此任务支持删除源文件，或此前的清理请求选择了保留文件。",
+    "source_file_delete_unconfirmed": "云端记录已不存在，但源文件删除尚未确认；已保留任务以便核对。",
+    "delete_option_conflict": "请保持此前清理请求的源文件选项；结果未确认的请求不能更改该选择。",
     "task_retried": "此任务已重试，请刷新列表后再操作。",
     "task_removed": "本地任务已被移除。",
     "task_not_finished": "本地任务结束后才能删除云端记录。",
@@ -53,6 +63,8 @@
     "clear_succeeded": "清空此类型的所有成功任务？当前范围内有 {{count}} 个任务。",
     "clear_scope": "清空范围是当前类型的全部相应任务，包含其他分页及被筛选条件隐藏的任务，也包含服务端处理请求前新结束的相应任务。",
     "delete_cloud": "同时删除 115 云端下载记录",
+    "delete_source_files": "是否删除源文件",
+    "delete_files_notice": "勾选后同时删除这些云下载任务对应的 115 云端文件或文件夹。",
     "keep_files": "仅删除下载记录，保留已下载文件。",
     "recheck": "服务端执行时会重新逐项检查；不支持云端清理或清理失败的任务将保留在列表中。",
     "available": "可清理云端记录，删除前仍会检查当前 115 下载状态。",
@@ -61,6 +73,7 @@
     "retained": "尚未确认任务已移除，请核对详情后再尝试。",
     "close": "关闭",
     "confirm_cloud": "删除任务及云端记录",
+    "confirm_cloud_files": "删除任务、云端记录及源文件",
     "confirm_local": "仅从 OpenList 删除",
     "network_unknown": "未收到响应，操作可能已到达服务端。请刷新并核对任务状态后再尝试。",
     "refresh_failed": "任务列表刷新失败。已确认的删除结果仍然有效，请稍后再次刷新列表。",

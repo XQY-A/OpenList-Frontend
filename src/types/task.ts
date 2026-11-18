@@ -17,4 +17,6 @@ export interface TaskInfo {
   cloud_delete_state?: string
   can_delete_cloud_record?: boolean
   cloud_delete_unavailable_reason?: string
+  can_delete_source_file?: boolean
+  source_file_delete_state?: string
 }

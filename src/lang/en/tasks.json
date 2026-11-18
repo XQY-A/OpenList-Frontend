@@ -70,6 +70,7 @@
   "receipt_pending": "No confirmed 115 receipt",
   "submission_status_label": "115 submission",
   "cloud_status_label": "Cloud record cleanup",
+  "source_file_status_label": "Source file deletion",
   "submission_state": {
     "pending": "Waiting to submit",
     "submitting": "Submitting",
@@ -84,9 +85,18 @@
     "unknown": "Cleanup result unknown",
     "deleted": "Cloud record confirmed absent"
   },
+  "source_file_state": {
+    "none": "Not requested",
+    "deleting": "Deleting source files",
+    "unknown": "Source file deletion unconfirmed",
+    "deleted": "Source file deletion confirmed"
+  },
   "cloud_reason": {
     "unsupported_tool": "This task type or download tool does not support 115 cloud record cleanup.",
     "capability_unavailable": "The server did not confirm cloud cleanup support for this task.",
+    "source_file_capability_unavailable": "The server did not confirm source file deletion support, or the previous cleanup request kept files.",
+    "source_file_delete_unconfirmed": "The cloud record is absent, but source file deletion is unconfirmed. The task was kept for checking.",
+    "delete_option_conflict": "Keep the source file option from the previous cleanup request. An unconfirmed request cannot change that choice.",
     "task_retried": "The task has been retried. Refresh the list before continuing.",
     "task_removed": "The local task has already been removed.",
     "task_not_finished": "The local task must finish before its cloud record can be deleted.",
@@ -119,6 +129,8 @@
     "clear_succeeded": "Clear all successful tasks of this type? {{count}} tasks are currently in scope.",
     "clear_scope": "Clear covers this entire task type, including other pages and tasks hidden by filters. It also includes matching tasks that finish before the server processes the request.",
     "delete_cloud": "Also delete 115 cloud download records",
+    "delete_source_files": "Delete source files",
+    "delete_files_notice": "This also deletes the 115 cloud files or folders belonging to these download tasks.",
     "keep_files": "Only download records are deleted. Downloaded files are kept.",
     "recheck": "The server checks each task again when processing the request. Unsupported tasks and tasks that fail cloud cleanup stay in the list.",
     "available": "Cloud cleanup is available; the current 115 download state will be checked before deletion.",
@@ -127,6 +139,7 @@
     "retained": "The task was not confirmed removed. Check its details before trying again.",
     "close": "Close",
     "confirm_cloud": "Delete tasks and cloud records",
+    "confirm_cloud_files": "Delete tasks, cloud records and source files",
     "confirm_local": "Delete from OpenList only",
     "network_unknown": "No response was received. The operation may have reached the server. Refresh and check the task states before trying again.",
     "refresh_failed": "The task list could not be refreshed. Any confirmed deletion results remain valid; refresh the list again later.",

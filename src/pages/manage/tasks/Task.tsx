@@ -399,6 +399,22 @@ export const Task = (
                   )}
                 </GridItem>
               </Show>
+              <Show when={props.source_file_delete_state !== undefined}>
+                <GridItem
+                  color="$neutral11"
+                  textAlign="right"
+                  css={{ whiteSpace: "nowrap" }}
+                >
+                  {t("tasks.source_file_status_label")}
+                </GridItem>
+                <GridItem color="$neutral11">
+                  {t(
+                    `tasks.source_file_state.${props.source_file_delete_state}`,
+                    undefined,
+                    props.source_file_delete_state,
+                  )}
+                </GridItem>
+              </Show>
             </Show>
             <Show when={props.error}>
               <GridItem

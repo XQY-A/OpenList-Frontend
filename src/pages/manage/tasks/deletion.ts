@@ -12,6 +12,7 @@ export interface TaskDeleteResult {
   task_id: string
   local_deleted: boolean
   cloud_state: string
+  source_file_delete_state?: string
   code: number
   reason?: string
   error?: string
@@ -35,6 +36,15 @@ export const cloudDeleteUnavailableReason = (task: TaskInfo, type: string) => {
   return task.cloud_delete_unavailable_reason || "capability_unavailable"
 }
 
+export const sourceFileDeleteUnavailableReason = (
+  task: TaskInfo,
+  type: string,
+) =>
+  cloudDeleteUnavailableReason(task, type) ||
+  (task.can_delete_source_file === true
+    ? ""
+    : "source_file_capability_unavailable")
+
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
 
@@ -43,6 +53,11 @@ const isDeleteResult = (value: unknown): value is TaskDeleteResult =>
   typeof value.task_id === "string" &&
   typeof value.local_deleted === "boolean" &&
   typeof value.cloud_state === "string" &&
+  (value.source_file_delete_state === undefined ||
+    (typeof value.source_file_delete_state === "string" &&
+      ["none", "deleting", "unknown", "deleted"].includes(
+        value.source_file_delete_state,
+      ))) &&
   typeof value.code === "number" &&
   Number.isFinite(value.code) &&
   (value.reason === undefined || typeof value.reason === "string") &&
@@ -54,12 +69,14 @@ export const parseTaskDeleteResponse = (
   response: { code?: number; message?: string; data?: unknown },
   request: TaskDeleteRequest,
   cloud: boolean,
+  sourceFiles = false,
 ): TaskDeleteResult[] => {
   const targets = [...new Set(request.targets.map((task) => task.id))]
   const failure = (id: string): TaskDeleteResult => ({
     task_id: id,
     local_deleted: false,
     cloud_state: "unknown",
+    ...(sourceFiles ? { source_file_delete_state: "unknown" } : {}),
     code:
       response.code === 200 || !response.code || response.code < 0
         ? 500
@@ -72,7 +89,7 @@ export const parseTaskDeleteResponse = (
           : "request_failed",
     error: response.code === 200 ? undefined : response.message,
   })
-  if (cloud) {
+  if (cloud || sourceFiles) {
     const data = response.data
     const raw =
       request.action === "delete"
@@ -89,13 +106,30 @@ export const parseTaskDeleteResponse = (
       ) {
         continue
       }
-      results.set(
-        item.task_id,
+      let result = item
+      if (
         item.local_deleted &&
-          (item.code !== 200 || item.cloud_state !== "deleted")
-          ? failure(item.task_id)
-          : item,
-      )
+        (item.code !== 200 || item.cloud_state !== "deleted")
+      ) {
+        result = failure(item.task_id)
+      } else if (sourceFiles) {
+        result = {
+          ...item,
+          source_file_delete_state: item.source_file_delete_state ?? "unknown",
+        }
+        if (
+          item.local_deleted &&
+          result.source_file_delete_state !== "deleted"
+        ) {
+          result = {
+            ...result,
+            local_deleted: false,
+            code: 500,
+            reason: "source_file_delete_unconfirmed",
+          }
+        }
+      }
+      results.set(item.task_id, result)
     }
     for (const id of targets) {
       if (!results.has(id)) results.set(id, failure(id))
