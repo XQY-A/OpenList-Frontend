@@ -25,11 +25,7 @@ main() {
     set_defaults
     check_git_version_and_commit
     set_build_version
-    if [[ "$LITE_FLAG" == "true" ]]; then
-        archive_name="openlist-frontend-dist-lite-${version_tag}"
-    else
-        archive_name="openlist-frontend-dist-${version_tag}"
-    fi
+    archive_name="openlist-frontend-dist-${version_tag}"
     build_project
     create_version_file
     handle_compression
@@ -47,7 +43,6 @@ parse_args() {
             --enforce-tag) ENFORCE_TAG="true"; shift ;;
             --skip-i18n) SKIP_I18N="true"; shift ;;
             --locked-i18n) LOCKED_I18N="true"; shift ;;
-            --lite) LITE_FLAG="true"; shift ;;
             -h|--help) display_help; exit 0 ;;
             *) log_error "Unknown option: $1"; display_help; exit 1 ;;
         esac
@@ -56,7 +51,7 @@ parse_args() {
 
 # Display help message
 display_help() {
-    echo "Usage: $0 [--dev|--release] [--compress|--no-compress] [--enforce-tag] [--skip-i18n|--locked-i18n] [--lite]"
+    echo "Usage: $0 [--dev|--release] [--compress|--no-compress] [--enforce-tag] [--skip-i18n|--locked-i18n]"
     echo ""
     echo "Options (will overwrite environment setting):"
     echo "  --dev         Build development version"
@@ -66,7 +61,6 @@ display_help() {
     echo "  --enforce-tag Force git tag requirement for both dev and release builds"
     echo "  --skip-i18n   Skip i18n build step"
     echo "  --locked-i18n Download and verify the pinned official translations, then apply local overlays"
-    echo "  --lite        Build lite version"
     echo ""
     echo "Environment variables:"
     echo "  OPENLIST_FRONTEND_BUILD_MODE=dev|release (default: dev)"
@@ -83,7 +77,6 @@ set_defaults() {
     ENFORCE_TAG=${ENFORCE_TAG:-${OPENLIST_FRONTEND_BUILD_ENFORCE_TAG:-false}}
     SKIP_I18N=${SKIP_I18N:-${OPENLIST_FRONTEND_BUILD_SKIP_I18N:-false}}
     LOCKED_I18N=${LOCKED_I18N:-${OPENLIST_FRONTEND_BUILD_LOCKED_I18N:-false}}
-    LITE_FLAG=${LITE_FLAG:-false}
     if [[ "$LOCKED_I18N" == "true" && "$SKIP_I18N" == "true" ]]; then
         log_error "--locked-i18n and --skip-i18n cannot be combined."
         exit 1
@@ -183,11 +176,7 @@ build_project() {
     node ./scripts/i18n.mjs
 
     log_step "==== Building project ===="
-    if [[ "$LITE_FLAG" == "true" ]]; then
-        pnpm build:lite
-    else
-        pnpm build
-    fi
+    pnpm build
 }
 
 # Fetch i18n files from release if skip-i18n flag is set

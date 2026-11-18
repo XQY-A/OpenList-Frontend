@@ -2,7 +2,7 @@
   "repository": "XQY-A/OpenList-Frontend",
   "upstream_repository": "OpenListTeam/OpenList-Frontend",
   "branch": "custom/115",
-  "upstream_commit": "9a57baf8690dbdb934d64995159d257b4b416ec8",
+  "upstream_commit": "c32fd4246b80b4410066cfc67230f197359d2de0",
   "automatic_paths": [
     "docs/**",
     "README*",
